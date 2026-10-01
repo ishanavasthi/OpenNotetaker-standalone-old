@@ -696,6 +696,7 @@ async function route(request, response) {
     const updated = await users.updateUser(user.id, {
       googleAccounts: removeGoogleAccount(listGoogleAccounts(user), account.id)
     });
+    forgetCalendarErrors(user.id, account.id);
     return sendJson(response, 200, await googleAccountsPayload(updated));
   }
 
@@ -868,11 +869,13 @@ async function route(request, response) {
       )
     });
 
-    return sendHtml(
-      response,
-      200,
-      `${connectedEmail} is connected. You can close this tab and return to OpenNotetaker.`
-    );
+    forgetCalendarErrors(pending.userId, accountId);
+
+    // Connect and Reconnect are same-tab links, so this is the tab the app was in: send
+    // it home rather than strand the user on a page asking them to close it.
+    response.writeHead(302, { Location: "/" });
+    response.end();
+    return;
   }
 
   if (url.pathname === "/api/meetings" && request.method === "GET") {
@@ -2288,6 +2291,17 @@ async function getGmailStatus(user) {
 // Error codes from a calendar sync attempt that only a fresh OAuth grant can fix — as
 // opposed to a transient network/API error, which shouldn't tell the user to reconnect.
 const CALENDAR_NEEDS_RECONNECT_CODES = new Set(["invalid_grant", "no_refresh_token", "calendar_scope_missing"]);
+
+// The scheduler's last result outlives the grant it judged. Reconnecting or disconnecting
+// replaces that grant, so without this its error keeps saying "reconnect needed" until
+// the next poll — up to pollSeconds after the user has already fixed it.
+function forgetCalendarErrors(userId, accountId) {
+  const result = calendarRuntime.lastResult;
+  if (!result?.userErrors) return;
+  result.userErrors = result.userErrors.filter(
+    (entry) => !(entry.userId === userId && entry.accountId === accountId)
+  );
+}
 
 async function getCalendarStatus(user) {
   const configured = isGmailConfigured();
